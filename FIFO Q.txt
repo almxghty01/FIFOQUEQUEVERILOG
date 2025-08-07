@@ -1,0 +1,246 @@
+3 MODULES DESIGN 
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity fifo_mem is
+    generic (
+        DEPTH : integer := 16;
+        WIDTH : integer := 8
+    );
+    port (
+        clk      : in  std_logic;
+        wr_en    : in  std_logic;
+        rd_addr  : in  integer range 0 to DEPTH-1;
+        wr_addr  : in  integer range 0 to DEPTH-1;
+        data_in  : in  std_logic_vector(WIDTH-1 downto 0);
+        data_out : out std_logic_vector(WIDTH-1 downto 0)
+    );
+end fifo_mem;
+
+architecture Behavioral of fifo_mem is
+    type ram_type is array(0 to DEPTH-1) of std_logic_vector(WIDTH-1 downto 0);
+    signal ram : ram_type := (others => (others => '0'));
+begin
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            if wr_en = '1' then
+                ram(wr_addr) <= data_in;
+            end if;
+        end if;
+    end process;
+
+    data_out <= ram(rd_addr);
+
+end Behavioral;
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity fifo_ctrl is
+    generic (
+        DEPTH : integer := 16
+    );
+    port(
+        clk     : in  std_logic;
+        reset   : in  std_logic;
+        wr_en   : in  std_logic;
+        rd_en   : in  std_logic;
+        full    : out std_logic;
+        empty   : out std_logic;
+        rd_addr : out integer range 0 to DEPTH-1;
+        wr_addr : out integer range 0 to DEPTH-1
+    );
+end fifo_ctrl;
+
+architecture Behavioral of fifo_ctrl is
+    signal write_ptr : integer range 0 to DEPTH-1 := 0;
+    signal read_ptr  : integer range 0 to DEPTH-1 := 0;
+    signal count     : integer range 0 to DEPTH := 0;
+begin
+
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            write_ptr <= 0;
+            read_ptr <= 0;
+            count <= 0;
+        elsif rising_edge(clk) then
+            -- Write pointer advance
+            if wr_en = '1' and full = '0' then
+                write_ptr <= (write_ptr + 1) mod DEPTH;
+                count <= count + 1;
+            end if;
+
+            -- Read pointer advance
+            if rd_en = '1' and empty = '0' then
+                read_ptr <= (read_ptr + 1) mod DEPTH;
+                count <= count - 1;
+            end if;
+        end if;
+    end process;
+
+    full <= '1' when count = DEPTH else '0';
+    empty <= '1' when count = 0 else '0';
+
+    rd_addr <= read_ptr;
+    wr_addr <= write_ptr;
+
+end Behavioral;
+
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity fifo_8bit_top is
+    generic (
+        DEPTH : integer := 16
+    );
+    port(
+        clk      : in  std_logic;
+        reset    : in  std_logic;
+        wr_en    : in  std_logic;
+        rd_en    : in  std_logic;
+        data_in  : in  std_logic_vector(7 downto 0);
+        data_out : out std_logic_vector(7 downto 0);
+        full     : out std_logic;
+        empty    : out std_logic
+    );
+end fifo_8bit_top;
+
+architecture Behavioral of fifo_8bit_top is
+
+    signal rd_addr, wr_addr : integer range 0 to DEPTH-1;
+    signal mem_wr_en : std_logic;
+
+begin
+
+    mem_wr_en <= wr_en and (full = '0');
+
+    mem_inst : entity work.fifo_mem
+        generic map(DEPTH => DEPTH, WIDTH => 8)
+        port map(
+            clk      => clk,
+            wr_en    => mem_wr_en,
+            rd_addr  => rd_addr,
+            wr_addr  => wr_addr,
+            data_in  => data_in,
+            data_out => data_out
+        );
+
+    ctrl_inst : entity work.fifo_ctrl
+        generic map(DEPTH => DEPTH)
+        port map(
+            clk     => clk,
+            reset   => reset,
+            wr_en   => wr_en,
+            rd_en   => rd_en,
+            full    => full,
+            empty   => empty,
+            rd_addr => rd_addr,
+            wr_addr => wr_addr
+        );
+
+end Behavioral;
+
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity tb_fifo_8bit is
+end entity;
+
+architecture Behavioral of tb_fifo_8bit is
+
+    constant DEPTH : integer := 16;
+
+    signal clk      : std_logic := '0';
+    signal reset    : std_logic := '0';
+    signal wr_en    : std_logic := '0';
+    signal rd_en    : std_logic := '0';
+    signal data_in  : std_logic_vector(7 downto 0) := (others => '0');
+    signal data_out : std_logic_vector(7 downto 0);
+    signal full     : std_logic;
+    signal empty    : std_logic;
+
+    -- Clock generation: 10ns period
+    constant clk_period : time := 10 ns;
+
+begin
+
+    clk_process : process
+    begin
+        while true loop
+            clk <= '0';
+            wait for clk_period / 2;
+            clk <= '1';
+            wait for clk_period / 2;
+        end loop;
+    end process;
+
+    uut: entity work.fifo_8bit_top
+        generic map(DEPTH => DEPTH)
+        port map(
+            clk      => clk,
+            reset    => reset,
+            wr_en    => wr_en,
+            rd_en    => rd_en,
+            data_in  => data_in,
+            data_out => data_out,
+            full     => full,
+            empty    => empty
+        );
+
+    stimulus: process
+    begin
+        -- Reset FIFO
+        reset <= '1';
+        wait for 2*clk_period;
+        reset <= '0';
+        wait for 2*clk_period;
+
+        -- Write 10 values
+        for i in 0 to 9 loop
+            data_in <= std_logic_vector(to_unsigned(i*3, 8));
+            wr_en <= '1';
+            wait for clk_period;
+        end loop;
+        wr_en <= '0';
+
+        wait for 4*clk_period;
+
+        -- Read 5 values
+        for i in 0 to 4 loop
+            rd_en <= '1';
+            wait for clk_period;
+        end loop;
+        rd_en <= '0';
+
+        wait for 5*clk_period;
+
+        -- Write 7 more values
+        for i in 10 to 16 loop
+            data_in <= std_logic_vector(to_unsigned(i*2, 8));
+            wr_en <= '1';
+            wait for clk_period;
+        end loop;
+        wr_en <= '0';
+
+        wait for 10*clk_period;
+
+        -- Read all
+        while empty = '0' loop
+            rd_en <= '1';
+            wait for clk_period;
+        end loop;
+        rd_en <= '0';
+
+        wait;
+    end process;
+
+end Behavioral;
+
